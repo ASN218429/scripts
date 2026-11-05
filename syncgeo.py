@@ -9,6 +9,7 @@ import io
 import ipaddress
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -133,7 +134,7 @@ def valid_location(country, region, city, postal, codes):
     values = {"country": country, "region": region.strip(), "city": city.strip(), "postal_code": postal.strip()}
     if country not in codes:
         raise Failure("Country must be an ISO 3166-1 alpha-2 code, e.g. DE, NL or GR. EU is not a country code.")
-    if values["region"] and not values["region"].startswith(country + "-"):
+    if values["region"] and not re.fullmatch(re.escape(country) + r"-[A-Z0-9]{1,3}", values["region"]):
         raise Failure(f"Region must be an ISO 3166-2 code beginning {country}-, or blank.")
     if any(any(c in value for c in "\r\n#") for value in values.values()):
         raise Failure("Location fields cannot contain newlines or #.")
