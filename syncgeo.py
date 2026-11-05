@@ -20,7 +20,7 @@ import textwrap
 import urllib.request
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 CONFIG = Path.home() / ".config/asn218429/syncgeo.json"
 REMOTE = "https://github.com/ASN218429/geofeed.git"
 SOURCE = "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS218429"
@@ -267,10 +267,16 @@ def region_name(country, code):
     return ""
 
 
-def choose(ui, label, query, search, render):
-    """Numbered result picker. Returns an item, or 'manual'; raises Back.
+KEEP, CLEAR = "keep", "clear"  # choose() results for optional fields
 
-    A result is never taken implicitly, even when it is the only match."""
+
+def choose(ui, label, query, search, render, *, enter=None, clear=False, empty=None, back="b back"):
+    """Numbered result picker. Returns an item, 'manual', KEEP or CLEAR; raises Back.
+
+    A result is never taken implicitly, even when it is the only match. For an optional field, `enter`
+    names what Enter does (e.g. "keeps [Frankfurt am Main]") and Enter returns KEEP; '-' returns CLEAR.
+    Both work after zero results too, so an optional search can always be left."""
+    escapes = (f", Enter {enter}" if enter else "") + (", - clears" if clear else "") + f", m manual, {back}: "
     while True:
         try:
             results = search(query, PAGE + 1)
@@ -285,15 +291,21 @@ def choose(ui, label, query, search, render):
                 ui.out("    " + ui.paint(str(index).rjust(digits), "key") + "  " + ui.clip(render(item), ui.width - 8 - digits))
             if more:
                 ui.note(f"More matches exist; type a longer {label} search to narrow them.", "muted")
-            hint = ("Choose 1" if len(results) == 1 else f"Choose 1-{len(results)}") + ", type to search again, m manual, b back: "
+            hint = ("Choose 1" if len(results) == 1 else f"Choose 1-{len(results)}") + ", type to search again" + escapes
         else:
             ui.warn(f"No {label} matches for '{query}'.")
-            hint = "Type to search again, m manual, b back: "
+            if empty:
+                ui.note(empty(query), "muted")
+            hint = "Type to search again" + escapes
         answer = ui.ask(hint)
         if answer.lower() == "b":
             raise Back()
         if answer.lower() == "m":
             return "manual"
+        if enter and not answer:
+            return KEEP
+        if enter and answer == "-":
+            return CLEAR
         if answer.isdigit() and results and 1 <= int(answer) <= len(results):
             return results[int(answer) - 1]
         if answer.isdigit():
@@ -317,6 +329,10 @@ def pick_country(ui, codes, current):
         if answer == "-":
             ui.warn("Country cannot be cleared here; use 'r' remove in the main menu to delete a mapping.")
             continue
+        code = answer.upper()
+        if len(code) == 2 and code.isalpha() and code in codes and country_name(code):
+            ui.note(f"{code}  {country_name(code)}", "ok")  # an exact ISO code is already an explicit choice
+            return code
         try:
             item = choose(ui, "country", answer, lambda q, n: helpers().search_countries(q, limit=n),
                           lambda c: f"{c['code']}  {c['name']}")
@@ -334,24 +350,61 @@ def pick_country(ui, codes, current):
         return item["code"]
 
 
-def pick_region(ui, country, current):
-    name = region_name(country, current) if current else ""
-    country_label = country_name(country) or country
+def city_region(country, city):
+    """ISO region for a city match: its own confident code, else the one subdivision matching its admin name."""
+    if not city:
+        return ""
+    code = (city.get("region") or "").upper()
+    if code.startswith(country + "-") and region_name(country, code):
+        return code
+    admin = (city.get("admin_name") or "").strip()
+    if admin:
+        try:
+            found = helpers().search_regions(country, admin, limit=2)
+        except ValueError:
+            found = []
+        if len(found) == 1:
+            return found[0]["code"]
+    return ""
+
+
+def pick_region(ui, country, current, city="", match=None, city_changed=False):
+    """Optional region after the city. Offers a labelled default (city match or saved value); never assigns one silently."""
+    suggested = city_region(country, match)
+    if suggested:
+        default, why = suggested, "suggested from city: " + (match.get("admin_name") or match["city"])
+        if current and current != suggested:
+            ui.warn(f"Saved region {current} {region_name(country, current)} does not match {match['city']}; Enter takes {suggested}.".replace("  ", " "))
+    elif current:
+        default, why = current, ("saved; check it fits " + city) if city_changed and city else "saved"
+    else:
+        default, why = "", ""
+    dname = region_name(country, default) if default else ""
+    example = dname or next((r["name"] for r in helpers().search_regions(country, "", limit=1)), "")
+    keep = f"keeps [{default} {dname} · {why}]".replace("  ", " ") if default else "leaves blank"
+    enter = keep + (", - clears" if default else "")
+    render = lambda r: f"{r['code']:<7} {r['name']}" + (f"  ({r['type']})" if r.get("type") else "")
+    search = lambda q, n: helpers().search_regions(country, "" if q == "?" else q, limit=n)
+
+    def empty(query):
+        looks_like_city = city and (fold(query) in fold(city) or fold(city) in fold(query))
+        what = f"'{query}' looks like the city ({city}), not a region." if looks_like_city else "A region is a state or province, not a city."
+        return f"{what} b goes back to the city step; ? lists all regions."
+
     while True:
-        keep = f"Enter keeps [{current} {name}]".strip() + ", '-' clears" if current else "Enter leaves blank"
-        answer = ui.ask(f"Region in {country_label} — name or ISO code ({keep}), ? list, b back: ")
+        answer = ui.ask(f"Region/state (optional{', e.g. ' + example if example else ''}; not a city) — Enter {enter}, ? list, b back: ")
         if not answer:
-            return current
+            return default
         if answer == "-":
             return ""
         if answer.lower() == "b":
             raise Back()
-        query = "" if answer == "?" else answer
-        try:
-            item = choose(ui, "region", query, lambda q, n: helpers().search_regions(country, q, limit=n),
-                          lambda r: f"{r['code']:<7} {r['name']}" + (f"  ({r['type']})" if r.get("type") else ""))
-        except Back:
-            continue
+        item = choose(ui, "region", "" if answer == "?" else answer, search, render,
+                      enter=keep, clear=bool(default), empty=empty, back="b back to city")
+        if item == KEEP:
+            return default
+        if item == CLEAR:
+            return ""
         if item == "manual":
             code = ui.ask(f"ISO 3166-2 code ({country}-…), blank for none: ").upper()
             if not code:
@@ -361,6 +414,10 @@ def pick_region(ui, country, current):
             ui.warn(f"'{code}' is not a known ISO 3166-2 subdivision of {country}.")
             continue
         return item["code"]
+
+
+def fold(text):
+    return helpers().fold(text).strip()
 
 
 def offer_city_download(ui, offline):
@@ -395,61 +452,70 @@ def city_line(city, ui, show_country=True):
     return f"{city['city']} — {where}{iso}{population}"
 
 
-def pick_city(ui, country, region, current, offline):
-    """Returns (city, region). Region changes only after an explicit yes."""
+def pick_city(ui, country, current, offline):
+    """Returns (city, match): match is the chosen catalogue entry, or None for kept/manual/cleared values.
+
+    The region is confirmed in the next step, so nothing here changes it."""
+    keep = f"keeps [{current}]" if current else "leaves blank"
     while True:
-        keep = f"Enter keeps [{current}], '-' clears" if current else "Enter leaves blank"
-        answer = ui.ask(f"City — search ({keep}), m manual, b back: ")
+        answer = ui.ask(f"City — search (Enter {keep}" + (", '-' clears" if current else "") + "), m manual, b back: ")
         if not answer:
-            return current, region
+            return current, None
         if answer == "-":
-            return "", region
+            return "", None
         if answer.lower() == "b":
             raise Back()
         if answer.lower() == "m":
-            return ui.ask("City name as it should appear: "), region
+            return ui.ask("City name as it should appear: "), None
         ready = offer_city_download(ui, offline)
         if ready == "b":
             continue
         if ready == "s":
-            return current, region
+            return current, None
         if ready == "m":
-            return ui.ask("City name as it should appear: "), region
+            return ui.ask("City name as it should appear: "), None
         try:
-            item = choose(ui, "city", answer, lambda q, n: helpers().search_cities(q, country=country, limit=n), lambda c: city_line(c, ui, not country))
+            item = choose(ui, "city", answer, lambda q, n: helpers().search_cities(q, country=country, limit=n),
+                          lambda c: city_line(c, ui, not country), enter=keep, clear=bool(current))
         except Back:
             continue
+        if item == KEEP:
+            return current, None
+        if item == CLEAR:
+            return "", None
         if item == "manual":
-            return ui.ask("City name as it should appear: "), region
-        suggested = item.get("region") or ""
-        if suggested and suggested != region:
-            label = f"{suggested} {region_name(country, suggested)}".strip()
-            question = f"Set region to {label} from this city match?" if not region else f"City is in {label}, not {region}. Use {suggested}?"
-            if ui.confirm(question, default=not region):
-                region = suggested
-        elif not suggested and not region:
-            ui.note("Region for this city is not confidently known; select it separately if needed.", "muted")
-        return item["city"], region
+            return ui.ask("City name as it should appear: "), None
+        return item["city"], item
 
 
 def ask_location(ui, codes, previous=None, offline=False):
-    """Step through country → region → city → postal. 'b' steps back; at the first step it raises Back."""
+    """Step through country → city → optional region → postal. 'b' steps back; at the first step it raises Back."""
     previous = previous or {}
     values = {k: previous.get(k, "") for k in FIELDS}
     ui.note("Enter keeps the value in [brackets] · '-' clears an optional field · b goes back a step", "muted")
     ui.note("Only enter a location you have confirmed for this deployment.", "muted")
+    match, city_changed = None, False
     step = 0
     while True:
         try:
             if step == 0:
                 country = pick_country(ui, codes, values["country"])
-                if country != values["country"]:
-                    values["region"] = ""
+                if values["country"] and country != values["country"]:
+                    stale = [values[k] for k in ("region", "city", "postal_code") if values[k]]
+                    if stale:
+                        ui.note(f"Country changed from {values['country']}; cleared " + ui.g["dot"].join(stale) + ".", "muted")
+                    values.update(region="", city="", postal_code="")
+                    match, city_changed = None, False
                 values["country"] = country
             elif step == 1:
-                values["region"] = pick_region(ui, values["country"], values["region"])
+                city, item = pick_city(ui, values["country"], values["city"], offline)
+                if city != values["city"]:
+                    match, city_changed = item, True
+                elif item:
+                    match = item
+                values["city"] = city
             elif step == 2:
-                values["city"], values["region"] = pick_city(ui, values["country"], values["region"], values["city"], offline)
+                values["region"] = pick_region(ui, values["country"], values["region"], values["city"], match, city_changed)
             elif step == 3:
                 keep = f"Enter keeps [{values['postal_code']}], '-' clears" if values["postal_code"] else "Enter leaves blank"
                 answer = ui.ask(f"Postal code ({keep}), b back: ")

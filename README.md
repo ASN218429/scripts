@@ -42,18 +42,24 @@ inventory, review it and remove it with `r` or `--remove CIDR` before saving.
 
 ### Choosing a location
 
-Each field is searched; nothing needs to be memorised and nothing is picked for you.
+Fields are asked in the order country → city → optional region → postal code. Nothing is picked for you.
 
-- **Country** — type part of a name or a code (`nether`, `deutsch`, `DE`), then choose a numbered result.
-- **Region** — searched within the chosen country by name or ISO 3166-2 code (`hess`, `DE-HE`); `?` lists all.
-- **City** — searched in a local GeoNames cache, filtered to the chosen country, showing the admin area and
-  population to disambiguate. An ISO region is shown in `[DE-BB]` only when it is confidently known; selecting such a
-  city asks before changing the region. Otherwise select the region yourself.
-- **Postal code** — free text.
+- **Country**: type an exact ISO code (`DE`) to accept it directly (the name is printed back), or part of a
+  name (`nether`, `deutsch`) and choose a numbered result. Changing the country clears the old region, city and
+  postal code.
+- **City**: searched in a local GeoNames cache, filtered to the chosen country, showing the admin area and
+  population to tell places apart (`Frankfurt am Main`, Hesse vs `Frankfurt (Oder)`, Brandenburg).
+- **Region/state (optional, not a city)**: searched within the country by name or ISO 3166-2 code (`hess`,
+  `DE-HE`); `?` lists all. When the chosen city has a confidently known ISO region, or its admin area matches
+  exactly one subdivision (Hesse → `DE-HE` Hessen), that region is offered as a labelled default such as
+  `[DE-HE Hessen · suggested from city: Hesse]`. It is only used if you press Enter. A saved region that conflicts
+  with a newly chosen city is flagged rather than kept silently.
+- **Postal code**: free text.
 
-At every prompt: a number chooses, any other text searches again, `m` enters a value manually, `b` steps back,
-Enter keeps the value shown in `[brackets]` (or leaves an optional field blank), and `-` clears region, city or
-postal code. Even a single match must be chosen explicitly.
+At every prompt, a number chooses, any other text searches again, `m` enters a value manually, and `b` steps back.
+Enter keeps the value shown in `[brackets]` (or leaves an optional field blank), and `-` clears region, city or postal
+code. Enter and `-` also work in an optional field's result list, even after a search with no matches. In the
+region list, `b` returns to the city step. Even a single match must be chosen explicitly.
 
 If the city cache is missing, the city step offers `d` download (one time, not with `--offline`), `m` manual entry or
 `s` skip. `syncgeo places-update` refreshes it explicitly. City names come from

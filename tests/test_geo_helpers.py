@@ -49,6 +49,8 @@ class PrefixPlans(unittest.TestCase):
 
 class PlaceSearch(unittest.TestCase):
     def test_country_and_region_names_and_codes(self):
+        self.assertEqual([c["code"] for c in geo.search_countries("DE")], ["DE"])
+        self.assertEqual([c["code"] for c in geo.search_countries(" de ")], ["DE"])
         self.assertEqual(geo.search_countries("Germany")[0]["code"], "DE")
         self.assertEqual(geo.search_countries("NL")[0]["code"], "NL")
         self.assertEqual(geo.search_regions("DE", "Hessen")[0]["code"], "DE-HE")

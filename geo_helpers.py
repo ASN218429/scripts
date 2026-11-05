@@ -49,6 +49,10 @@ def _search(items, query, limit, fields):
 
 
 def search_countries(query, limit=20):
+    code = str(query).strip().upper()
+    exact = [c for c in catalogue()["countries"] if c["code"] == code]
+    if exact:
+        return copy.deepcopy(exact)
     return _search(catalogue()["countries"], query, limit, ["code", "name"])
 
 
